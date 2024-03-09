@@ -29,6 +29,11 @@ dependencies {
 
     // This dependency is used by the application.
     implementation(libs.guava)
+
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.5.2")
+    
+    implementation("com.squareup.okio:okio:2.3.0")
+    implementation("org.apache.commons:commons-csv:1.9.0")
 }
 
 // Apply a specific Java toolchain to ease working on different environments.
