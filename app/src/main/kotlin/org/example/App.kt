@@ -1,67 +1,111 @@
 package org.example
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.runBlocking
-import okio.Buffer
-import okio.Okio
-import okio.source
-import okio.buffer
-import okio.BufferedSource
+import kotlinx.coroutines.*
 import java.io.File
+import java.io.FileReader
+import java.io.BufferedReader
+import java.util.*
+import kotlin.math.max
 
-class App {
-    val greeting: String
-        get() {
-            return "Hello World! This is Neo"
+
+suspend fun readCsvPart(file: File, startLine: Int, endLine: Int): Map<String, RangeRecord> = withContext(Dispatchers.IO) {
+    val map = mutableMapOf<String, RangeRecord>()
+
+    val reader = FileReader(file)
+    val br = BufferedReader(reader)
+    var lineCount = 0
+
+    try {
+        while (true) { 
+            val line = br.readLine() ?: break
+            if (lineCount in startLine until endLine) {
+                if (line.isNotBlank()) {
+                    val record = parseStockRecord(line)
+                    record?.let {
+                        if (map.containsKey(record.name)) {
+                            map[record.name]!! += record
+                        } else {
+                            map[record.name] = RangeRecord(record.name, record, record)
+                        }
+                    }   
+                }
+            }
+            lineCount++
         }
+    } finally {
+        br.close()
+    }
+    
+    map
 }
 
-fun main() {
-    val filePath = getResourceFilePath("values.csv")
-    val numChunks = 4 // Number of chunks for parallel processing
+fun splitLines(file: File, threads: Int): List<IntArray> {
+    val lines = file.readLines().size
+    val chunkSize = (lines + threads - 1) / threads
+    val chunks = mutableListOf<IntArray>()
+    var startLine = 0
 
-    runBlocking {
-        val file = File(filePath)
-        val fileLength = file.length()
-        val numLines = file.bufferedReader().use { it.readLines().filter { line -> line.isNotBlank() }.size }
+    for (i in 0 until threads) {
+        val endLine = minOf(startLine + chunkSize, lines)
+        chunks.add(intArrayOf(startLine, endLine - 1))
+        startLine = endLine
+    }
 
-        val linesPerChunk = numLines / numChunks
+    return chunks
+}
 
-        val jobs = ArrayList<Buffer>()
+fun main() = runBlocking {
+    val fileName = "values.csv"
+    val threads = 4
+    val file = File(getResourceFilePath(fileName))
+    val chunks = splitLines(file, threads)
 
-        // Create a coroutine job for each chunk of the file
-        for (i in 0 until numChunks) {
-            val startLine = i * linesPerChunk
-            val endLine = if (i == numChunks - 1) numLines else ((i + 1) * linesPerChunk)
+    val jobs = chunks.map { chunk ->
+        async {
+            readCsvPart(file, chunk[0], chunk[1] + 1)
+        }
+    }
 
-            val job = async(Dispatchers.IO) {
-                val source = file.source().buffer()
-                skipLines(source, startLine)
-                val buffer = Buffer()
-                repeat(endLine - startLine) {
-                    var line: String?
-                    do {
-                        line = source.readUtf8Line()
-                    } while (line != null && line.isBlank())
-                    if (line != null) {
-                        buffer.writeUtf8(line)
-                        buffer.writeUtf8("\n")
+    val results = jobs.map { it.await() }
+
+    findLargestIncreased(results)
+}
+
+fun findLargestIncreased(maps: List<Map<String, RangeRecord>>) {
+    val mergedMap = LinkedHashMap<String, RangeRecord>()
+    val increaseMap = LinkedHashMap<String, Double>()
+
+    var company = ""
+    var largestIncreased = 0.0
+
+    maps.forEach { map: Map<String, RangeRecord> ->
+        map.forEach { (key, value) ->
+            if (mergedMap.containsKey(key)) {
+                if (mergedMap[key] is RangeRecord) {
+                    mergedMap[key] = value + mergedMap[key] as RangeRecord
+                    increaseMap[key] = max(mergedMap[key]!!.lastRecord.value - mergedMap[key]!!.firstRecord.value, 0.0)
+                    if (increaseMap[key]!! > largestIncreased) {
+                        company = key
+                        largestIncreased = increaseMap[key]!!
                     }
+                } else {
+                    throw IllegalArgumentException("Cannot merge non-numeric values for key: $key")
                 }
-                buffer
+            } else {
+                mergedMap[key] = value
+                increaseMap[key] = max(value.lastRecord.value - value.firstRecord.value, 0.0)
+                if (increaseMap[key]!! > largestIncreased) {
+                    company = key
+                    largestIncreased = increaseMap[key]!!
+                }
             }
-            jobs.add(job.await())
         }
+    }
 
-        // Process the chunks here...
-        for (buffer in jobs) {
-            val chunkData = buffer.readUtf8()
-            // Process chunkData here...
-            println("Chunk data: $chunkData")
-        }
-
-        // No need to close files opened with Okio
+    if (company != "") {
+        println("Company:$company Increased:$largestIncreased")
+    } else {
+        println("nil")
     }
 }
 
@@ -70,10 +114,4 @@ fun getResourceFilePath(fileName: String): String {
     val resourceUrl = classLoader.getResource(fileName)
         ?: throw IllegalArgumentException("File not found: $fileName")
     return File(resourceUrl.file).path
-}
-
-fun skipLines(source: BufferedSource, startLine: Int) {
-    repeat(startLine) {
-        source.readUtf8Line() // Skip lines until startLine
-    }
 }
