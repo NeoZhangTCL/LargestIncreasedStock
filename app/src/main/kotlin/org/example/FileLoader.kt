@@ -30,7 +30,7 @@ class FileLoader(
         }
     }
 
-    private fun getResourceFilePath(fileName: String): String {
+    internal fun getResourceFilePath(fileName: String): String {
         val classLoader = javaClass.classLoader
         val resourceUrl = classLoader.getResource(fileName)
             ?: throw IllegalArgumentException("File not found: $fileName")
